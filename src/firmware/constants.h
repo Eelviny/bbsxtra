@@ -38,10 +38,11 @@
 #define THROTTLE_GLOBAL_SPEED_LIMIT_ENABLED		1
 #define THROTTLE_GLOBAL_SPEED_LIMIT_STD_LVLS	2
 
-#define LIGHTS_MODE_DEFAULT				0
-#define LIGHTS_MODE_DISABLED			1
-#define LIGHTS_MODE_ALWAYS_ON			2
-#define LIGHTS_MODE_BRAKE_LIGHT			3
+#define LIGHTS_MODE_DEFAULT						0
+#define LIGHTS_MODE_DISABLED					1
+#define LIGHTS_MODE_ALWAYS_ON					2
+#define LIGHTS_MODE_BRAKE_LIGHT					3
+#define LIGHTS_MODE_DEFAULT_AND_BRAKE_LIGHT		4 //When light is off, the light will be used as brake light, When its turned on it stays on
 
 #define CONFIG_VERSION					5
 #define PSTATE_VERSION					1

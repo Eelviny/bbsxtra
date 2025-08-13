@@ -251,7 +251,8 @@ void app_set_lights(bool on)
 	}
 	else
 	{
-		if (LIGHTS_MODE == LIGHTS_MODE_DEFAULT && lights_state != on)
+		if (LIGHTS_MODE == LIGHTS_MODE_DEFAULT && lights_state != on ||
+			LIGHTS_MODE == LIGHTS_MODE_DEFAULT_AND_BRAKE_LIGHT && lights_state != on)
 		{
 			lights_state = on;
 			eventlog_write_data(EVT_DATA_LIGHTS, on);
@@ -752,6 +753,11 @@ bool apply_brake(uint8_t* target_current)
 
 	#if LIGHTS_MODE == LIGHTS_MODE_BRAKE_LIGHT
 		lights_set(is_braking);
+	#endif
+
+	#if LIGHTS_MODE == LIGHTS_MODE_DEFAULT_AND_BRAKE_LIGHT
+		if (!app_get_lights()) // If lights are on, don't use brake light
+			lights_set(is_braking);
 	#endif
 
 	if (is_braking)
