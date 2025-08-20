@@ -51,7 +51,6 @@ static uint16_t low_voltage_pad_x100;
 static uint16_t high_voltage_pad_x100;
 
 static assist_level_data_t assist_level_data;
-static uint16_t speed_limit_ramp_interval_rpm_x10;
 
 static bool cruise_paused;
 static int8_t temperature_contr_c;
@@ -115,8 +114,6 @@ void app_init()
 	ramp_up_current_interval_ms = (MAX_CURRENT_AMPS * 10u) / CURRENT_RAMP_AMPS_S;
 	power_blocked_until_ms = 0;
 
-	speed_limit_ramp_interval_rpm_x10 = convert_wheel_speed_kph_to_rpm(SPEED_LIMIT_RAMP_DOWN_INTERVAL_KPH, false) * 10;
-
 	pretension_cutoff_speed_rpm_x10 = convert_wheel_speed_kph_to_rpm(PRETENSION_SPEED_CUTOFF_KPH, false) * 10;
 
 	cruise_paused = true;
@@ -175,11 +172,11 @@ void app_process()
 	bool thermal_limiting = apply_thermal_limit(&target_current);
 	bool lvc_limiting = apply_low_voltage_limit(&target_current);
 	bool shift_limiting =
-#if HAS_SHIFT_SENSOR_SUPPORT
+	#if HAS_SHIFT_SENSOR_SUPPORT
 		apply_shift_sensor_interrupt(&target_current);
-#else
+	#else
 		false;
-#endif
+	#endif
 	bool is_limiting = speed_limiting || thermal_limiting || lvc_limiting || shift_limiting;
 	bool is_braking = apply_brake(&target_current);
 
@@ -503,57 +500,46 @@ uint8_t calculate_current_for_power(uint16_t watts)
 bool apply_speed_limit(uint8_t* target_current, bool throttle_override)
 {
 	static bool speed_limiting = false;
-
 	#if USE_SPEED_SENSOR
-		int32_t max_speed_rpm_x10 = throttle_override ?
-			assist_level_data.max_throttle_wheel_speed_rpm_x10 : assist_level_data.max_pas_wheel_speed_rpm_x10;
+		static uint32_t last_pid_ms;
+		static int16_t lastInput;
+		static float ITerm;
 
-		int32_t max_speed_ramp_low_rpm_x10 = max_speed_rpm_x10 - speed_limit_ramp_interval_rpm_x10;
-		int32_t max_speed_ramp_high_rpm_x10 = max_speed_rpm_x10 + speed_limit_ramp_interval_rpm_x10;
+		// TODO define configuration for these
+		float kp, ki, kd;
+
+		uint16_t max_speed_rpm_x10 = throttle_override ?
+			assist_level_data.max_throttle_wheel_speed_rpm_x10 : assist_level_data.max_pas_wheel_speed_rpm_x10;
 
 		if (max_speed_rpm_x10 > 0)
 		{
-			int16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
-
-			if (current_speed_rpm_x10 < max_speed_ramp_low_rpm_x10)
+			// PID controller. Evaluates every 100ms
+			uint32_t now_ms = system_ms();
+			if ((now_ms - last_pid_ms) >= 100)
 			{
-				// no limiting
-				if (speed_limiting)
-				{
-					speed_limiting = false;
-					eventlog_write_data(EVT_DATA_SPEED_LIMITING, 0);
-				}
-			}
-			else
-			{
-				if (!speed_limiting)
-				{
-					speed_limiting = true;
-					eventlog_write_data(EVT_DATA_SPEED_LIMITING, 1);
-				}
+				uint16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
+				int16_t error = max_speed_rpm_x10 - current_speed_rpm_x10;
+				// Accumulate the difference. This is what tracks the value it's "hunting" for
+				// and if it's above the max speed, this will go into negative
+				ITerm += ki * error;
+				// Don't allow the error to go above the target current
+				ITerm = CLAMP(ITerm, 0, *target_current);
 
-				if (current_speed_rpm_x10 > max_speed_ramp_high_rpm_x10)
-				{
-					if (*target_current > 1)
-					{
-						*target_current = 1;
-						return true;
-					}
-				}
-				else
-				{
-					// linear ramp down when approaching max speed.
-					uint8_t tmp = (uint8_t)MAP32(current_speed_rpm_x10, max_speed_ramp_low_rpm_x10, max_speed_ramp_high_rpm_x10, *target_current, 1);
-					if (*target_current > tmp)
-					{
-						*target_current = tmp;
-						return true;
-					}
-				}
+				int16_t dInput = current_speed_rpm_x10 - lastInput;
+
+				int16_t output = (float)kp * error + ITerm - kd * dInput;
+				uint8_t clamped_output = CLAMP(output, 0, *target_current);
+
+				speed_limiting = *target_current > clamped_output;
+				*target_current = clamped_output;
+
+				lastInput = current_speed_rpm_x10;
+				last_pid_ms = now_ms;
 			}
 		}
 	#endif
-	return false;
+	eventlog_write_data(EVT_DATA_SPEED_LIMITING, speed_limiting ? 0 : 1);
+	return speed_limiting;
 }
 
 bool apply_thermal_limit(uint8_t* target_current)
