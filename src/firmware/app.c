@@ -71,11 +71,11 @@ void apply_pretension(uint8_t* target_current);
 void apply_cruise(uint8_t* target_current, uint8_t throttle_percent);
 uint8_t calculate_current_for_power(uint16_t watts);
 bool apply_throttle(uint8_t* target_current, uint8_t throttle_percent);
-bool apply_speed_limit(uint8_t* target_current, bool throttle_override);
+void apply_speed_limit(uint8_t* target_current, bool throttle_override);
 bool apply_thermal_limit(uint8_t* target_current);
 bool apply_low_voltage_limit(uint8_t* target_current);
 bool apply_shift_sensor_interrupt(uint8_t* target_current);
-bool apply_brake(uint8_t* target_current);
+void set_brake_lights(bool on);
 void apply_current_ramp_up(uint8_t* target_current, bool enable);
 void apply_current_ramp_down(uint8_t* target_current, bool enable);
 
@@ -128,6 +128,12 @@ void app_init()
 		app_set_operation_mode(OPERATION_MODE_SPORT);
 	}
 	#endif
+
+	#if (LIGHTS_MODE == LIGHTS_MODE_DISABLED /*|| (motor_status() & MOTOR_ERROR_LVC) */)
+		lights_disable();
+	#else
+		lights_enable();
+	#endif
 }
 
 void app_process()
@@ -136,12 +142,12 @@ void app_process()
 	uint8_t target_cadence = assist_level_data.level.max_cadence_percent;
 	uint8_t throttle_percent = throttle_map_response(throttle_read());
 
-	bool pas_engaged = false;
 	bool throttle_override = false;
 
-	if (check_power_block())
+	if (check_power_block() || brake_is_activated())
 	{
 		target_current = 0;
+		set_brake_lights(true);
 	}
 	else if (assist_level == ASSIST_PUSH && USE_PUSH_WALK)
 	{
@@ -149,11 +155,10 @@ void app_process()
 	}
 	else
 	{
+		set_brake_lights(false);
+
 		apply_pretension(&target_current);
 		apply_pas_cadence(&target_current, throttle_percent);
-
-		pas_engaged = target_current > 0;
-
 		apply_cruise(&target_current, throttle_percent);
 
 		throttle_override = apply_throttle(&target_current, throttle_percent);
@@ -168,20 +173,25 @@ void app_process()
 		}
 	}
 
-	bool speed_limiting = apply_speed_limit(&target_current, throttle_override);
-	bool thermal_limiting = apply_thermal_limit(&target_current);
-	bool lvc_limiting = apply_low_voltage_limit(&target_current);
-	bool shift_limiting =
-	#if HAS_SHIFT_SENSOR_SUPPORT
-		apply_shift_sensor_interrupt(&target_current);
-	#else
-		false;
-	#endif
-	bool is_limiting = speed_limiting || thermal_limiting || lvc_limiting || shift_limiting;
-	bool is_braking = apply_brake(&target_current);
+	if (target_current > 0)
+	{
+		bool thermal_limiting = apply_thermal_limit(&target_current);
+		bool lvc_limiting = apply_low_voltage_limit(&target_current);
+		bool shift_limiting =
+		#if HAS_SHIFT_SENSOR_SUPPORT
+			apply_shift_sensor_interrupt(&target_current);
+		#else
+			false;
+		#endif
+		bool is_limiting = thermal_limiting || lvc_limiting || shift_limiting;
+		// bool is_braking = apply_brake(&target_current);
 
-	apply_current_ramp_up(&target_current, is_limiting || !throttle_override);
-	apply_current_ramp_down(&target_current, !is_braking && !shift_limiting);
+		apply_current_ramp_up(&target_current, is_limiting || !throttle_override);
+		apply_current_ramp_down(&target_current, !shift_limiting);
+		#if USE_SPEED_SENSOR
+			apply_speed_limit(&target_current, throttle_override);
+		#endif
+	}
 
 	motor_set_target_speed(target_cadence);
 	motor_set_target_current(target_current);
@@ -194,12 +204,6 @@ void app_process()
 	{
 		motor_disable();
 	}
-
-	#if (LIGHTS_MODE == LIGHTS_MODE_DISABLED /*|| (motor_status() & MOTOR_ERROR_LVC) */)
-	lights_disable();
-	#else
-	lights_enable();
-	#endif
 }
 
 
@@ -256,6 +260,16 @@ void app_set_lights(bool on)
 			lights_set(on);
 		}
 	}
+}
+
+void set_brake_lights(bool on)
+{
+	#if LIGHTS_MODE == LIGHTS_MODE_BRAKE_LIGHT
+		lights_set(on);
+	#elif LIGHTS_MODE == LIGHTS_MODE_DEFAULT_AND_BRAKE_LIGHT
+		if (!app_get_lights()) // If lights are on, don't use brake light
+			lights_set(on);
+	#endif
 }
 
 #ifdef SPEED_LIMIT_SPORT_SWITCH_KPH
@@ -497,12 +511,11 @@ uint8_t calculate_current_for_power(uint16_t watts)
 	return power_current_percent;
 }
 
-bool apply_speed_limit(uint8_t* target_current, bool throttle_override)
-{
-	static bool speed_limiting = false;
-	#if USE_SPEED_SENSOR
+#if USE_SPEED_SENSOR
+	void apply_speed_limit(uint8_t* target_current, bool throttle_override)
+	{
 		static uint32_t last_pid_ms;
-		static int16_t lastInput;
+		static uint16_t last_speed_rpm_x10;
 		static float ITerm;
 
 		// TODO define configuration for these
@@ -515,32 +528,39 @@ bool apply_speed_limit(uint8_t* target_current, bool throttle_override)
 		{
 			// PID controller. Evaluates every 100ms
 			uint32_t now_ms = system_ms();
-			if ((now_ms - last_pid_ms) >= 100)
+			uint16_t time_diff = now_ms - last_pid_ms;
+			if (time_diff >= 100)
 			{
 				uint16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
+
+				// If the PID has been off for >=2s, reset
+				if (time_diff >= 2000) {
+					last_speed_rpm_x10 = current_speed_rpm_x10;
+					ITerm = *target_current;
+				}
+
 				int16_t error = max_speed_rpm_x10 - current_speed_rpm_x10;
 				// Accumulate the difference. This is what tracks the value it's "hunting" for
 				// and if it's above the max speed, this will go into negative
 				ITerm += ki * error;
 				// Don't allow the error to go above the target current
-				ITerm = CLAMP(ITerm, 0, *target_current);
+				ITerm = CLAMP(ITerm, 1, *target_current);
 
-				int16_t dInput = current_speed_rpm_x10 - lastInput;
+				int16_t dInput = current_speed_rpm_x10 - last_speed_rpm_x10;
 
 				int16_t output = (float)kp * error + ITerm - kd * dInput;
-				uint8_t clamped_output = CLAMP(output, 0, *target_current);
+				uint8_t clamped_output = CLAMP(output, 1, *target_current);
 
-				speed_limiting = *target_current > clamped_output;
+				eventlog_write_data(EVT_DATA_SPEED_LIMITING, *target_current > clamped_output ? 0 : 1);
 				*target_current = clamped_output;
 
-				lastInput = current_speed_rpm_x10;
+				// Commit current loops' vars for the next loop to use
+				last_speed_rpm_x10 = current_speed_rpm_x10;
 				last_pid_ms = now_ms;
 			}
 		}
-	#endif
-	eventlog_write_data(EVT_DATA_SPEED_LIMITING, speed_limiting ? 0 : 1);
-	return speed_limiting;
-}
+	}
+#endif
 
 bool apply_thermal_limit(uint8_t* target_current)
 {
@@ -732,27 +752,6 @@ bool apply_shift_sensor_interrupt(uint8_t* target_current)
 	return false;
 }
 #endif
-
-bool apply_brake(uint8_t* target_current)
-{
-	bool is_braking = brake_is_activated();
-
-	#if LIGHTS_MODE == LIGHTS_MODE_BRAKE_LIGHT
-		lights_set(is_braking);
-	#endif
-
-	#if LIGHTS_MODE == LIGHTS_MODE_DEFAULT_AND_BRAKE_LIGHT
-		if (!app_get_lights()) // If lights are on, don't use brake light
-			lights_set(is_braking);
-	#endif
-
-	if (is_braking)
-	{
-		*target_current = 0;
-	}
-
-	return is_braking;
-}
 
 void apply_current_ramp_up(uint8_t* target_current, bool enable)
 {
