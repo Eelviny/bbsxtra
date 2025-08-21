@@ -144,14 +144,18 @@ void app_process()
 
 	bool throttle_override = false;
 
-	if (check_power_block() || brake_is_activated())
+	if (check_power_block())
+	{
+		target_current = 0;
+	}
+	else if (brake_is_activated())
 	{
 		target_current = 0;
 		set_brake_lights(true);
 	}
 	else if (assist_level == ASSIST_PUSH && USE_PUSH_WALK)
 	{
-		target_current = 10;
+		target_current = calculate_current_for_power(WALK_MODE_TARGET_POWER_WATTS);
 	}
 	else
 	{
@@ -173,25 +177,21 @@ void app_process()
 		}
 	}
 
-	if (target_current > 0)
-	{
-		bool thermal_limiting = apply_thermal_limit(&target_current);
-		bool lvc_limiting = apply_low_voltage_limit(&target_current);
-		bool shift_limiting =
-		#if HAS_SHIFT_SENSOR_SUPPORT
-			apply_shift_sensor_interrupt(&target_current);
-		#else
-			false;
-		#endif
-		bool is_limiting = thermal_limiting || lvc_limiting || shift_limiting;
-		// bool is_braking = apply_brake(&target_current);
+	bool thermal_limiting = apply_thermal_limit(&target_current);
+	bool lvc_limiting = apply_low_voltage_limit(&target_current);
+	bool shift_limiting =
+	#if USE_SHIFT_SENSOR
+		apply_shift_sensor_interrupt(&target_current);
+	#else
+		false;
+	#endif
+	bool is_limiting = thermal_limiting || lvc_limiting || shift_limiting;
 
-		apply_current_ramp_up(&target_current, is_limiting || !throttle_override);
-		apply_current_ramp_down(&target_current, !shift_limiting);
-		#if USE_SPEED_SENSOR
-			apply_speed_limit(&target_current, throttle_override);
-		#endif
-	}
+	apply_current_ramp_up(&target_current, is_limiting || !throttle_override);
+	apply_current_ramp_down(&target_current, !shift_limiting);
+	#if USE_SPEED_SENSOR
+		apply_speed_limit(&target_current, throttle_override);
+	#endif
 
 	motor_set_target_speed(target_cadence);
 	motor_set_target_current(target_current);
@@ -514,17 +514,16 @@ uint8_t calculate_current_for_power(uint16_t watts)
 #if USE_SPEED_SENSOR
 	void apply_speed_limit(uint8_t* target_current, bool throttle_override)
 	{
-		static uint32_t last_pid_ms;
+		static uint32_t last_pid_ms = 100;
 		static uint16_t last_speed_rpm_x10;
-		static float ITerm;
-
-		// TODO define configuration for these
-		float kp, ki, kd;
+		static uint8_t clamped_output;
+		static float i_term;
+		static bool speed_limiting = false;
 
 		uint16_t max_speed_rpm_x10 = throttle_override ?
 			assist_level_data.max_throttle_wheel_speed_rpm_x10 : assist_level_data.max_pas_wheel_speed_rpm_x10;
 
-		if (max_speed_rpm_x10 > 0)
+		if (max_speed_rpm_x10 > 0 && *target_current > 0)
 		{
 			// PID controller. Evaluates every 100ms
 			uint32_t now_ms = system_ms();
@@ -536,27 +535,40 @@ uint8_t calculate_current_for_power(uint16_t watts)
 				// If the PID has been off for >=2s, reset
 				if (time_diff >= 2000) {
 					last_speed_rpm_x10 = current_speed_rpm_x10;
-					ITerm = *target_current;
+					i_term = *target_current;
 				}
 
-				int16_t error = max_speed_rpm_x10 - current_speed_rpm_x10;
+				float error = max_speed_rpm_x10 - current_speed_rpm_x10;
 				// Accumulate the difference. This is what tracks the value it's "hunting" for
 				// and if it's above the max speed, this will go into negative
-				ITerm += ki * error;
+				i_term += SPEED_LIMIT_PID_KI_X01 * error;
 				// Don't allow the error to go above the target current
-				ITerm = CLAMP(ITerm, 1, *target_current);
+				i_term = CLAMP(i_term, 1, *target_current);
 
-				int16_t dInput = current_speed_rpm_x10 - last_speed_rpm_x10;
+				float d_input = current_speed_rpm_x10 - last_speed_rpm_x10;
 
-				int16_t output = (float)kp * error + ITerm - kd * dInput;
-				uint8_t clamped_output = CLAMP(output, 1, *target_current);
-
-				eventlog_write_data(EVT_DATA_SPEED_LIMITING, *target_current > clamped_output ? 0 : 1);
-				*target_current = clamped_output;
+				int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * error + i_term - SPEED_LIMIT_PID_KD_X10 * d_input);
+				// We want to keep the motor spinning at 1% even if at the speed limit to avoid jerky behaviour
+				clamped_output = CLAMP(output, 1, *target_current);
 
 				// Commit current loops' vars for the next loop to use
 				last_speed_rpm_x10 = current_speed_rpm_x10;
 				last_pid_ms = now_ms;
+			}
+
+			if (*target_current > clamped_output)
+			{
+				if (!speed_limiting)
+				{
+					speed_limiting = true;
+					eventlog_write_data(EVT_DATA_SPEED_LIMITING, 1);
+				}
+				*target_current = clamped_output;
+			}
+			else if (speed_limiting)
+			{
+				speed_limiting = false;
+				eventlog_write_data(EVT_DATA_SPEED_LIMITING, 0);
 			}
 		}
 	}
@@ -682,75 +694,70 @@ bool apply_low_voltage_limit(uint8_t* target_current)
 	return false;
 }
 
-#if HAS_SHIFT_SENSOR_SUPPORT
-bool apply_shift_sensor_interrupt(uint8_t* target_current)
-{
-	static uint32_t shift_sensor_act_ms = 0;
-	static bool shift_sensor_last = false;
-	static bool shift_sensor_interrupting = false;
-	static bool shift_sensor_logged = false;
-
-	// Exit immediately if shift interrupts disabled.
-	#if !USE_SHIFT_SENSOR
-		return false;
-	#endif
-
-	bool active = shift_sensor_is_activated();
-	if (active)
+#if USE_SHIFT_SENSOR
+	bool apply_shift_sensor_interrupt(uint8_t* target_current)
 	{
-		// Check for new pulse from the gear sensor during shift interrupt
-		if (!shift_sensor_last && shift_sensor_interrupting)
+		static uint32_t shift_sensor_act_ms = 0;
+		static bool shift_sensor_last = false;
+		static bool shift_sensor_interrupting = false;
+		static bool shift_sensor_logged = false;
+
+		bool active = shift_sensor_is_activated();
+		if (active)
 		{
-			// Consecutive gear change, do restart.
-			shift_sensor_interrupting = false;
+			// Check for new pulse from the gear sensor during shift interrupt
+			if (!shift_sensor_last && shift_sensor_interrupting)
+			{
+				// Consecutive gear change, do restart.
+				shift_sensor_interrupting = false;
+			}
+			if (!shift_sensor_interrupting)
+			{
+				uint16_t duration_ms = SHIFT_INTERRUPT_DURATION_MS;
+				shift_sensor_act_ms = system_ms() + duration_ms;
+				shift_sensor_interrupting = true;
+			}
+			shift_sensor_last = true;
 		}
+		else
+		{
+			shift_sensor_last = false;
+		}
+
 		if (!shift_sensor_interrupting)
 		{
-			uint16_t duration_ms = SHIFT_INTERRUPT_DURATION_MS;
-			shift_sensor_act_ms = system_ms() + duration_ms;
-			shift_sensor_interrupting = true;
+			return false;
 		}
-		shift_sensor_last = true;
-	}
-	else
-	{
-		shift_sensor_last = false;
-	}
 
-	if (!shift_sensor_interrupting)
-	{
+		if (system_ms() >= shift_sensor_act_ms)
+		{
+			// Shift is finished, reset function state.
+			shift_sensor_interrupting = false;
+			// Logging is skipped, unless current has been clamped during shift interrupt.
+			if (shift_sensor_logged)
+			{
+				shift_sensor_logged = false;
+				eventlog_write_data(EVT_DATA_SHIFT_SENSOR, 0);
+			}
+			return false;
+		}
+
+		if ((*target_current) > SHIFT_INTERRUPT_CURRENT_THRESHOLD_PERCENT)
+		{
+			if (!shift_sensor_logged)
+			{
+				// Logging only once per shifting interrupt.
+				shift_sensor_logged = true;
+				eventlog_write_data(EVT_DATA_SHIFT_SENSOR, 1);
+			}
+			// Set target current based on desired current threshold during shift.
+			*target_current = SHIFT_INTERRUPT_CURRENT_THRESHOLD_PERCENT;
+
+			return true;
+		}
+
 		return false;
 	}
-
-	if (system_ms() >= shift_sensor_act_ms)
-	{
-		// Shift is finished, reset function state.
-		shift_sensor_interrupting = false;
-		// Logging is skipped, unless current has been clamped during shift interrupt.
-		if (shift_sensor_logged)
-		{
-			shift_sensor_logged = false;
-			eventlog_write_data(EVT_DATA_SHIFT_SENSOR, 0);
-		}
-		return false;
-	}
-
-	if ((*target_current) > SHIFT_INTERRUPT_CURRENT_THRESHOLD_PERCENT)
-	{
-		if (!shift_sensor_logged)
-		{
-			// Logging only once per shifting interrupt.
-			shift_sensor_logged = true;
-			eventlog_write_data(EVT_DATA_SHIFT_SENSOR, 1);
-		}
-		// Set target current based on desired current threshold during shift.
-		*target_current = SHIFT_INTERRUPT_CURRENT_THRESHOLD_PERCENT;
-
-		return true;
-	}
-
-	return false;
-}
 #endif
 
 void apply_current_ramp_up(uint8_t* target_current, bool enable)
