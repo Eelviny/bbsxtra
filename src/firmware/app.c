@@ -213,7 +213,7 @@ void app_set_assist_level(uint8_t level)
 	{
 		if (assist_level == ASSIST_PUSH && USE_PUSH_WALK)
 		{
-			// When releasig push walk mode pedals may have been rotating
+			// When releasing push walk mode pedals may have been rotating
 			// with the motor, block motor power for 2 seconds to prevent PAS
 			// sensor from incorrectly applying power if returning to a PAS level.
 			block_power_for(1000);
@@ -514,7 +514,7 @@ uint8_t calculate_current_for_power(uint16_t watts)
 #if USE_SPEED_SENSOR
 	void apply_speed_limit(uint8_t* target_current, bool throttle_override)
 	{
-		static uint32_t last_pid_ms = 100;
+		static uint32_t last_pid_ms = 50;
 		static uint16_t last_speed_rpm_x10;
 		static uint8_t clamped_output;
 		static float i_term;
@@ -525,10 +525,10 @@ uint8_t calculate_current_for_power(uint16_t watts)
 
 		if (max_speed_rpm_x10 > 0 && *target_current > 0)
 		{
-			// PID controller. Evaluates every 100ms
+			// PID controller. Evaluates every 50ms
 			uint32_t now_ms = system_ms();
 			uint16_t time_diff = now_ms - last_pid_ms;
-			if (time_diff >= 100)
+			if (time_diff >= 50)
 			{
 				uint16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
 
@@ -541,13 +541,13 @@ uint8_t calculate_current_for_power(uint16_t watts)
 				float error = max_speed_rpm_x10 - current_speed_rpm_x10;
 				// Accumulate the difference. This is what tracks the value it's "hunting" for
 				// and if it's above the max speed, this will go into negative
-				i_term += SPEED_LIMIT_PID_KI_X01 * error;
+				i_term += SPEED_LIMIT_PID_KI_X005 * error;
 				// Don't allow the error to go above the target current
-				i_term = CLAMP(i_term, 1, *target_current);
+				i_term = CLAMP(i_term, 0, *target_current);
 
 				float d_input = current_speed_rpm_x10 - last_speed_rpm_x10;
 
-				int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * error + i_term - SPEED_LIMIT_PID_KD_X10 * d_input);
+				int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * error + i_term - SPEED_LIMIT_PID_KD_X5 * d_input);
 				// We want to keep the motor spinning at 1% even if at the speed limit to avoid jerky behaviour
 				clamped_output = CLAMP(output, 1, *target_current);
 
