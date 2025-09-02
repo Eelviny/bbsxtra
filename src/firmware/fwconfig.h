@@ -30,6 +30,10 @@
 #define USE_SHIFT_SENSOR	HAS_SHIFT_SENSOR_SUPPORT
 #define USE_PUSH_WALK		1
 #define USE_PRETENSION		0
+// Use pretension only if we are currently in Sport Mode.
+//When this is enabled, "USE_PRETENSION" is beeing ignored.
+//Usefull for EU riding when the bike gets checked without load (wheel in the air). When Pretensioning is enabled it might turn your wheel indefinitely and you might get asked some annoying questions
+#define USE_PRETENSION_ONLY_IN_SPORT_MODE 1 
 #define PRETENSION_SPEED_CUTOFF_KPH 16
 #define USE_TEMPERATURE_SENSOR	TEMPERATURE_SENSOR_CONTR
 #define LIGHTS_MODE	LIGHTS_MODE_DEFAULT

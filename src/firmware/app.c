@@ -360,12 +360,17 @@ uint8_t app_get_temperature()
 
 void apply_pretension(uint8_t* target_current)
 {
-	#if USE_SPEED_SENSOR && USE_PRETENSION
-		uint16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
+	#if USE_SPEED_SENSOR && (USE_PRETENSION || USE_PRETENSION_ONLY_IN_SPORT_MODE)
 
-		if (current_speed_rpm_x10 > pretension_cutoff_speed_rpm_x10)
+		//Check if we are in Sport mode or if pretensioning is also allowed in normal modes
+		if (!USE_PRETENSION_ONLY_IN_SPORT_MODE || operation_mode == OPERATION_MODE_SPORT)
 		{
-			*target_current = 1;
+			uint16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
+
+			if (current_speed_rpm_x10 > pretension_cutoff_speed_rpm_x10)
+			{
+				*target_current = 1;
+			}
 		}
 	#endif
 	return;
