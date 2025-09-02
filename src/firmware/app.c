@@ -161,7 +161,9 @@ void app_process()
 	{
 		set_brake_lights(false);
 
-		apply_pretension(&target_current);
+		#if USE_SPEED_SENSOR && USE_PRETENSION
+			apply_pretension(&target_current);
+		#endif
 		apply_pas_cadence(&target_current, throttle_percent);
 		apply_cruise(&target_current, throttle_percent);
 
@@ -369,18 +371,18 @@ uint8_t app_get_temperature()
 	return (uint8_t)temp_max;
 }
 
-void apply_pretension(uint8_t* target_current)
-{
-	#if USE_SPEED_SENSOR && USE_PRETENSION
+#if USE_SPEED_SENSOR && USE_PRETENSION
+	void apply_pretension(uint8_t* target_current)
+	{
 		uint16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
 
 		if (current_speed_rpm_x10 > pretension_cutoff_speed_rpm_x10)
 		{
 			*target_current = 1;
 		}
-	#endif
 	return;
-}
+	}
+#endif
 
 void apply_pas_cadence(uint8_t* target_current, uint8_t throttle_percent)
 {
@@ -527,7 +529,7 @@ uint8_t calculate_current_for_power(uint16_t watts)
 		{
 			// PID controller. Evaluates every 50ms
 			uint32_t now_ms = system_ms();
-			uint16_t time_diff = now_ms - last_pid_ms;
+			uint16_t time_diff = (uint16_t)(now_ms - last_pid_ms);
 			if (time_diff >= 50)
 			{
 				uint16_t current_speed_rpm_x10 = speed_sensor_get_rpm_x10();
@@ -535,21 +537,27 @@ uint8_t calculate_current_for_power(uint16_t watts)
 				// If the PID has been off for >=2s, reset
 				if (time_diff >= 2000) {
 					last_speed_rpm_x10 = current_speed_rpm_x10;
-					i_term = *target_current;
+					i_term = (float)(*target_current);
 				}
 
-				float error = max_speed_rpm_x10 - current_speed_rpm_x10;
+				float error = (float)max_speed_rpm_x10 - (float)current_speed_rpm_x10;
 				// Accumulate the difference. This is what tracks the value it's "hunting" for
 				// and if it's above the max speed, this will go into negative
 				i_term += SPEED_LIMIT_PID_KI_X005 * error;
 				// Don't allow the error to go above the target current
 				i_term = CLAMP(i_term, 0, *target_current);
 
-				float d_input = current_speed_rpm_x10 - last_speed_rpm_x10;
+				float d_input = (float)current_speed_rpm_x10 - (float)last_speed_rpm_x10;
 
 				int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * error + i_term - SPEED_LIMIT_PID_KD_X5 * d_input);
 				// We want to keep the motor spinning at 1% even if at the speed limit to avoid jerky behaviour
-				clamped_output = CLAMP(output, 1, *target_current);
+				if (output < 1) {
+	                clamped_output = 1;
+	            } else if (output > *target_current) {
+	                clamped_output = *target_current;
+	            } else {
+	                clamped_output = (uint8_t)output;
+	            }
 
 				// Commit current loops' vars for the next loop to use
 				last_speed_rpm_x10 = current_speed_rpm_x10;
