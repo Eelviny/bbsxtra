@@ -23,7 +23,6 @@ uint16_t pas_get_pulse_counter();
 bool pas_is_pedaling_forwards();
 bool pas_is_pedaling_backwards();
 
-void speed_sensor_set_signals_per_rpm(uint8_t num_signals);
 bool speed_sensor_is_moving();
 uint16_t speed_sensor_get_rpm_x10();
 

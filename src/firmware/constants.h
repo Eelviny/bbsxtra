@@ -67,8 +67,6 @@ typedef struct
 
 #define HAS_CONTROLLER_TEMP_SENSOR				1
 
-#define HAS_SHIFT_SENSOR_SUPPORT				1
-
 #if defined(BBS02)
 	#define MAX_CADENCE_RPM_X10					1500
 #elif defined(BBSHD)

@@ -78,7 +78,6 @@ static uint16_t pas_stop_delay_periods;
 static volatile uint16_t speed_ticks_period_length; // pulse length counted in interrupt frequency (100us)
 static uint16_t speed_period_counter;
 static bool speed_prev_state;
-static uint8_t speed_ticks_per_rpm;
 
 
 static float thermistor_ntc_calculate_temperature(float R, float invBeta)
@@ -140,7 +139,6 @@ void sensors_init()
 	speed_period_counter = 0;
 	speed_ticks_period_length = 0;
 	speed_prev_state = false;
-	speed_ticks_per_rpm = 1;
 
 	// pins do not have external interrupt, use timer0 to evaluate state frequently
 	SET_PIN_INPUT(PIN_PAS1);
@@ -218,11 +216,6 @@ bool pas_is_pedaling_backwards()
 	return period_length > 0 && direction_backward;
 }
 
-void speed_sensor_set_signals_per_rpm(uint8_t num_signals)
-{
-	speed_ticks_per_rpm = num_signals;
-}
-
 bool speed_sensor_is_moving()
 {
 	uint16_t tmp;
@@ -242,7 +235,7 @@ uint16_t speed_sensor_get_rpm_x10()
 
 	if (tmp > 0)
 	{
-		return 6000000ul / tmp / speed_ticks_per_rpm;
+		return 6000000ul / tmp / (uint8_t)SPEED_SENSOR_SIGNALS;
 	}
 
 	return 0;

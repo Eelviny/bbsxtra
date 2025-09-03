@@ -11,6 +11,7 @@ bbsxtra is based on [bbs-fw](https://github.com/danielnilsson9/bbs-fw). If you w
 ## Major features of bbsxtra
 
 - **Define power in watts instead of amps:** provide the same level of power no matter the battery level by compensating for the voltage drop as the battery depletes.
+- **PID controller speed limit** to make the motor more smoothly and accurately hit the target max speed for throttle & PAS
 - **Per assist level speed limit in km/h:** more accurately set the speed limit in absolute units instead of percentage
 - **Partial Eggrider support:** supports the road/offroad switch in Eggrider, using the integrated standard/sport mode of bbsxtra.
 - **More accurate speed sensing:** specify wheel circumference in mm along with the diameter in inches set on the display. The firmware compensates for the difference and shows the more accurate speed.
@@ -33,11 +34,11 @@ But wait, there's more! Here's what bbs-fw already provides:
 
 ### Planned, but not yet added
 
-- PID controller speed limit, to make the motor more smoothly and accurately hit the target max speed
 - Cascading PID that sets the speed of the bike to hit a certain pedal cadence RPM, to keep your cadence in the "sweet spot"
 - Speed-adjustable cruise control, press a button to make the bike continue at the current speed
 - A configuration CLI tool to configure, compile and flash firmware
 - Support mph and farenheit through said configuration tool (currently everything is in km/h and celsius)
+- An arbitrary number of assist profiles that can be activated using different key combinations, not just standard/sport mode
 
 ### Not planned
 
