@@ -540,16 +540,16 @@ uint8_t calculate_current_for_power(uint16_t watts)
 					i_term = (float)(*target_current);
 				}
 
-				float error = (float)max_speed_rpm_x10 - (float)current_speed_rpm_x10;
+				int16_t error = (int16_t)max_speed_rpm_x10 - (int16_t)current_speed_rpm_x10;
 				// Accumulate the difference. This is what tracks the value it's "hunting" for
 				// and if it's above the max speed, this will go into negative
-				i_term += SPEED_LIMIT_PID_KI_X005 * error;
+				i_term += SPEED_LIMIT_PID_KI_X005 * (float)error;
 				// Don't allow the error to go above the target current
 				i_term = CLAMP(i_term, 0, *target_current);
 
-				float d_input = (float)current_speed_rpm_x10 - (float)last_speed_rpm_x10;
+				int16_t d_input = (int16_t)current_speed_rpm_x10 - (int16_t)last_speed_rpm_x10;
 
-				int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * error + i_term - SPEED_LIMIT_PID_KD_X5 * d_input);
+				int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * (float)error + i_term - SPEED_LIMIT_PID_KD_X5 * (float)d_input);
 				// We want to keep the motor spinning at 1% even if at the speed limit to avoid jerky behaviour
 				if (output < 1) {
 	                clamped_output = 1;
