@@ -537,7 +537,7 @@ uint8_t calculate_current_for_power(uint16_t watts)
 				// If the PID has been off for >=2s, reset
 				if (time_diff >= 2000) {
 					last_speed_rpm_x10 = current_speed_rpm_x10;
-					i_term = (float)(*target_current);
+					i_term = (float)*target_current;
 				}
 
 				int16_t error = (int16_t)max_speed_rpm_x10 - (int16_t)current_speed_rpm_x10;
@@ -875,8 +875,9 @@ void reload_assist_params()
 	{
 		assist_level_data.level = assist_levels[operation_mode][assist_level];
 
-		assist_level_data.max_pas_wheel_speed_rpm_x10 = ((int32_t)convert_wheel_speed_kph_to_rpm(assist_level_data.level.max_pas_speed_kph, false)) * 10;
-		assist_level_data.max_throttle_wheel_speed_rpm_x10 = ((int32_t)convert_wheel_speed_kph_to_rpm(assist_level_data.level.max_throttle_speed_kph, false)) * 10;
+		// Adding +2 is a hacky workaround until I can figure out why the PID controller settles around 2 under the limit
+		assist_level_data.max_pas_wheel_speed_rpm_x10 = ((int32_t)convert_wheel_speed_kph_to_rpm(assist_level_data.level.max_pas_speed_kph + 2u, false)) * 10;
+		assist_level_data.max_throttle_wheel_speed_rpm_x10 = ((int32_t)convert_wheel_speed_kph_to_rpm(assist_level_data.level.max_throttle_speed_kph + 2u, false)) * 10;
 		eventlog_write_data(EVT_DATA_WHEEL_SPEED_PPM, assist_level_data.max_pas_wheel_speed_rpm_x10);
 
 		if (assist_level_data.level.target_power_watts > 0 && assist_level_data.level.max_pas_speed_kph > 0)
