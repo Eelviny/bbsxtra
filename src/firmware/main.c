@@ -46,7 +46,6 @@ void main(void)
 	adc_init();
 	sensors_init();
 
-	speed_sensor_set_signals_per_rpm(SPEED_SENSOR_SIGNALS);
 	pas_set_stop_delay((uint16_t)PAS_STOP_DELAY_X100S * 10);
 
 	battery_init();
