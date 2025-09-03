@@ -2,9 +2,9 @@
 #include "stdbool.h"
 #include "stdio.h"
 
-#define SPEED_LIMIT_PID_KP 0.2f
-#define SPEED_LIMIT_PID_KI_X005 0.01f // Multiply by 0.05
-#define SPEED_LIMIT_PID_KD_X5 0.04f
+#define SPEED_LIMIT_PID_KP 0.10f
+#define SPEED_LIMIT_PID_KI_X005 0.004f // Multiply by 0.05
+#define SPEED_LIMIT_PID_KD_X5 0.01f
 #define WHEEL_CIRCUMFERENCE_MM 2268
 
 #define MAX(x, y) (x) > (y) ? (x) : (y)
@@ -114,32 +114,37 @@ void apply_speed_limit(uint8_t* target_current, uint16_t current_speed)
 
 	if (max_speed_rpm_x10 > 0 && *target_current > 0)
 	{
-		// PID controller. Evaluates every 100ms
+		// PID controller. Evaluates every 50ms
 		uint32_t now_ms = system_ms;
-		uint16_t time_diff = now_ms - last_pid_ms;
-		if (time_diff >= 50)
+		uint16_t time_diff = (uint16_t)(now_ms - last_pid_ms);
+		if (time_diff >= 60)
 		{
 			uint16_t current_speed_rpm_x10 = convert_wheel_speed_kph_to_rpm(current_speed) * 10;
-			// printf("Current wheel RPM %u\n", current_speed_rpm_x10);
 
 			// If the PID has been off for >=2s, reset
-			// if (time_diff >= 2000) {
-			// 	last_speed_rpm_x10 = current_speed_rpm_x10;
-			// 	i_term = *target_current;
-			// }
+			if (time_diff >= 2000) {
+				last_speed_rpm_x10 = current_speed_rpm_x10;
+				i_term = (float)(*target_current);
+			}
 
-			float error = max_speed_rpm_x10 - current_speed_rpm_x10;
+			int16_t error = (int16_t)max_speed_rpm_x10 - (int16_t)current_speed_rpm_x10;
 			// Accumulate the difference. This is what tracks the value it's "hunting" for
 			// and if it's above the max speed, this will go into negative
-			i_term += SPEED_LIMIT_PID_KI_X005 * error;
+			i_term += SPEED_LIMIT_PID_KI_X005 * (float)error;
 			// Don't allow the error to go above the target current
 			i_term = CLAMP(i_term, 0, *target_current);
 
-			float d_input = current_speed_rpm_x10 - last_speed_rpm_x10;
+			int16_t d_input = (int16_t)current_speed_rpm_x10 - (int16_t)last_speed_rpm_x10;
 
-			int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * error + i_term - SPEED_LIMIT_PID_KD_X5 * d_input);
+			int16_t output = (int16_t)(SPEED_LIMIT_PID_KP * (float)error + i_term - SPEED_LIMIT_PID_KD_X5 * (float)d_input);
 			// We want to keep the motor spinning at 1% even if at the speed limit to avoid jerky behaviour
-			clamped_output = CLAMP(output, 1, *target_current);
+			if (output < 1) {
+                clamped_output = 1;
+            } else if (output > *target_current) {
+                clamped_output = *target_current;
+            } else {
+                clamped_output = (uint8_t)output;
+            }
 
 			// Commit current loops' vars for the next loop to use
 			last_speed_rpm_x10 = current_speed_rpm_x10;
@@ -170,7 +175,7 @@ int main(void)
     const float accel_per_amp = 0.02f; // arbitrary gain from current % → accel
     const float drag = 0.006f;     // proportional drag vs speed
 
-    for (uint32_t t = 0; t <= 1000000; t += 5)
+    for (uint32_t t = 0; t <= 100000; t += 5)
     {
     	system_ms = t;
     	target_current = 100;  // full throttle request
