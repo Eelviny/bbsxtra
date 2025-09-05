@@ -524,7 +524,7 @@ uint8_t calculate_current_for_power(uint16_t watts)
 
 		uint16_t max_speed_rpm_x10;
 		// If the user engages the throttle while the throttle limit is lower than the current PAS limit, the behaviour seen is that the motor stops.
-		// Instead, only override if the throttle limit is higher than the PAS limit, or if the pedals are spinning
+		// Instead, only override if the throttle limit is higher than the PAS limit, or if the user is not pedaling
 		if (throttle_override && (assist_level_data.max_throttle_wheel_speed_rpm_x10 > assist_level_data.max_pas_wheel_speed_rpm_x10 || !pas_is_pedaling_forwards()))
 		{
 			max_speed_rpm_x10 = assist_level_data.max_throttle_wheel_speed_rpm_x10;
