@@ -83,6 +83,8 @@ typedef struct
 // Map battery percent to provide a linear relationship on the
 // 5-bar battery indicator of the SW102 display.
 #define BATTERY_PERCENT_MAP_SW102				1
+// Map battery percent using a 14S Li-Ion voltage discharge lookup table.
+#define BATTERY_PERCENT_MAP_LIION_14S			2
 
 #define THROTTLE_RESPONSE_LINEAR				1
 #define THROTTLE_RESPONSE_QUADRATIC				2
