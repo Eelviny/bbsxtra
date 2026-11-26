@@ -11,9 +11,12 @@
 #include "system.h"
 #include "util.h"
 #include "fwconfig.h"
+#include "constants.h"
 
+#if (BATTERY_PERCENT_MAP != BATTERY_PERCENT_MAP_LIION_14S)
 static int16_t battery_empty_x100v;
 static int16_t battery_full_x100v;
+#endif
 
 static uint8_t battery_percent;
 static uint32_t motor_disabled_at_ms;
@@ -45,6 +48,64 @@ For example, if the maximum battery voltage is 58.8V and the low cutoff voltage 
 - Full LVC limiting will occur at 0% SOC, so: 43.3V
 */
 
+#if (BATTERY_PERCENT_MAP == BATTERY_PERCENT_MAP_LIION_14S)
+typedef struct
+{
+	int16_t voltage_x100v;
+	uint8_t soc_percent;
+} soc_point_t;
+
+// 14S Li-Ion discharge curve combining typical cell curve below 50V / above 54.3V
+// (2.80V/cell = 39.2V = 0%, 4.15V/cell = 58.1V = 100%) with measured BMS values.
+#define SOC_LUT_SIZE 11
+static const soc_point_t soc_lut[SOC_LUT_SIZE] =
+{
+	{ 3920,   0 }, // 39.2V (2.80V/cell) ->   0%
+	{ 4480,   5 }, // 44.8V (3.20V/cell) ->   5%
+	{ 4690,  10 }, // 46.9V (3.35V/cell) ->  10%
+	{ 4830,  20 }, // 48.3V (3.45V/cell) ->  20%
+	{ 5000,  33 }, // 50.0V (3.57V/cell) ->  32.6% (BMS measured)
+	{ 5140,  43 }, // 51.4V (3.67V/cell) ->  42.8% (BMS measured)
+	{ 5240,  50 }, // 52.4V (3.74V/cell) ->  49.5% (BMS measured)
+	{ 5390,  64 }, // 53.9V (3.85V/cell) ->  63.8% (BMS measured)
+	{ 5430,  69 }, // 54.3V (3.88V/cell) ->  69.0% (BMS measured)
+	{ 5600,  85 }, // 56.0V (4.00V/cell) ->  85%
+	{ 5810, 100 }  // 58.1V (4.15V/cell) -> 100%
+};
+
+static uint8_t compute_battery_percent()
+{
+	int16_t value_x100v = motor_get_battery_voltage_x10() * 10l;
+
+	if (value_x100v <= soc_lut[0].voltage_x100v)
+	{
+		return 0;
+	}
+	else if (value_x100v >= soc_lut[SOC_LUT_SIZE - 1].voltage_x100v)
+	{
+		return 100;
+	}
+
+	uint8_t i;
+	for (i = 0; i < SOC_LUT_SIZE - 1; i++)
+	{
+		if (value_x100v < soc_lut[i + 1].voltage_x100v)
+		{
+			break;
+		}
+	}
+
+	int16_t percent = (int16_t)MAP32(
+		value_x100v,
+		soc_lut[i].voltage_x100v,
+		soc_lut[i + 1].voltage_x100v,
+		soc_lut[i].soc_percent,
+		soc_lut[i + 1].soc_percent
+	);
+
+	return (uint8_t)CLAMP(percent, 0, 100);
+}
+#else
 static uint8_t compute_battery_percent()
 {
 	int16_t value_x100v = motor_get_battery_voltage_x10() * 10l;
@@ -52,6 +113,7 @@ static uint8_t compute_battery_percent()
 
 	return (uint8_t)CLAMP(percent, 0, 100);
 }
+#endif
 
 #if (BATTERY_PERCENT_MAP == BATTERY_PERCENT_MAP_SW102)
 static uint8_t map_percent_sw102(uint8_t percent)
@@ -100,6 +162,7 @@ void battery_init()
 	motor_disabled_at_ms = 0;
 	first_reading_done = false;
 
+#if (BATTERY_PERCENT_MAP != BATTERY_PERCENT_MAP_LIION_14S)
 	uint16_t battery_min_voltage_x100v = LOW_CUT_OFF_V * 100u;
 	uint16_t battery_max_voltage_x100v = MAX_BATTERY_X100V;
 
@@ -109,6 +172,7 @@ void battery_init()
 
 	battery_full_x100v = battery_max_voltage_x100v - battery_full_pad_x100v;
 	battery_empty_x100v = battery_min_voltage_x100v + battery_empty_pad_x100v;
+#endif
 }
 
 void battery_process()
